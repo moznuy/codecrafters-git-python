@@ -3,9 +3,9 @@ import dataclasses
 import datetime
 import functools
 import hashlib
+import os
 import shutil
 import sys
-import os
 import urllib.request
 import zlib
 from typing import Iterator
