@@ -61,6 +61,43 @@ def hash_object():
     print(digest)
 
 
+def ls_tree():
+    # TODO: same code
+    no = sys.argv[2]
+    revision = sys.argv[3]
+    assert no == "--name-only"
+
+    folder, file = revision[:2], revision[2:]
+    with open(f".git/objects/{folder}/{file}", "rb") as f:
+        compressed = f.read()
+    raw_content = zlib.decompress(compressed)
+
+    header: bytes
+    content: bytes
+    header, content = raw_content.split(b'\0', maxsplit=1)
+
+    file_type: str
+    size_raw: str
+    file_type, size_raw = header.decode().split(maxsplit=1)
+    size = int(size_raw)
+    assert file_type == 'tree'
+    assert size == len(content)
+
+    while True:
+        if not content:
+            break
+        file_header: bytes
+        rest: bytes
+        file_sha: bytes
+        file_header, rest = content.split(b'\0', maxsplit=1)
+        file_sha, content = rest[:20], rest[20:]
+        mode, filename = file_header.decode().split()
+        hex_digest = file_sha.hex()
+        # print(mode, filename, hex_digest)
+        print(filename)
+
+
+
 def main():
     command = sys.argv[1]
     if command == "init":
@@ -69,6 +106,8 @@ def main():
         cat_file()
     elif command == "hash-object":
         hash_object()
+    elif command == "ls-tree":
+        ls_tree()
     else:
         raise RuntimeError(f"Unknown command #{command}")
 
