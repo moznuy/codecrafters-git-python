@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import sys
 import os
@@ -145,6 +146,43 @@ def write_tree(path: str) -> str:
     return digest
 
 
+def commit_tree():
+    tree = sys.argv[2]
+    p = sys.argv[3]
+    parent = sys.argv[4]
+    m = sys.argv[5]
+    message = sys.argv[6]
+    assert p == '-p'
+    assert m == '-m'
+    author = "Serhii Charykov <laammaar@gmail.com>"
+    timestamp = datetime.datetime.now(tz=datetime.UTC).timestamp()
+    # TODO: get proper offset
+    tz_offset = '+0000'
+
+    content: bytes = b''
+    content += f'tree {tree}\n'.encode()
+    content += f'parent {parent}\n'.encode()
+    content += f'author {author} {timestamp} {tz_offset}\n'.encode()
+    content += f'committer {author} {timestamp} {tz_offset}\n'.encode()
+    content += f"\n".encode()
+    content += message.encode()
+
+    # Same code
+    size = len(content)
+    header = f"commit {size}".encode()
+    raw_content = header + b'\0' + content
+
+    digest = hashlib.sha1(raw_content).hexdigest()
+    compressed = zlib.compress(raw_content)
+
+    folder, file = digest[:2], digest[2:]
+
+    os.makedirs(f".git/objects/{folder}", exist_ok=True)
+    with open(f".git/objects/{folder}/{file}", 'wb') as f:
+        f.write(compressed)
+
+    return digest
+
 def main():
     command = sys.argv[1]
     if command == "init":
@@ -157,6 +195,8 @@ def main():
         ls_tree()
     elif command == "write-tree":
         print(write_tree('.'))
+    elif command == "commit-tree":
+        print(commit_tree())
     else:
         raise RuntimeError(f"Unknown command #{command}")
 
