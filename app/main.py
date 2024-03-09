@@ -334,6 +334,19 @@ class GitRefDelta:
     instructions: list[Union[InstructionCopy, InstructionInsert]]  # TOdo: use enums
 
 
+def parse_offset_size(flags, i, data):
+    result = 0
+    shift = -8
+    for bit in flags:
+        shift += 8
+        if bit == "0":
+            continue
+        i += 1
+        result |= data[i] << shift
+
+    return i, result
+
+
 def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
     i = 0
 
@@ -345,30 +358,9 @@ def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
 
         # Copy
         if cur & 0x80:
-            offset = 0
-            size = 0
-
-            if cur & 0b0000_0001:
-                i += 1
-                offset |= data[i]
-            if cur & 0b0000_0010:
-                i += 1
-                offset |= data[i] << 8
-            if cur & 0b0000_0100:
-                i += 1
-                offset |= data[i] << 16
-            if cur & 0b0000_1000:
-                i += 1
-                offset |= data[i] << 24
-            if cur & 0b0001_0000:
-                i += 1
-                size |= data[i]
-            if cur & 0b0010_0000:
-                i += 1
-                size |= data[i] << 8
-            if cur & 0b0100_0000:
-                i += 1
-                size |= data[i] << 16
+            flags = format(cur & 0x7F, "07b")[::-1]
+            i, offset = parse_offset_size(flags[:4], i, data)
+            i, size = parse_offset_size(flags[4:], i, data)
 
             # Special case for 0 size
             if not size:
@@ -388,7 +380,7 @@ def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
 
         # Zero
         else:
-            raise RuntimeError("Rseserved value")
+            raise RuntimeError("Reserved value")
 
     # Sanity check
     assert i == len(data)

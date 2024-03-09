@@ -1,5 +1,7 @@
 .idea
 test_dir*
+sample1
+tmp*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
