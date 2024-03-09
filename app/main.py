@@ -111,14 +111,19 @@ def write_tree(path: str) -> str:
         if entry.is_file():
             digest = hash_object(os.path.join(path, entry.name))
             name = entry.name
-            mode = '100644'
+            #          1   0   0   6   4   4
+            mode = 0b001_000_000_110_100_100
+            # mode = '100644'
         else:
             digest = write_tree(os.path.join(path, entry.name))
             name = entry.name
             # TODO: not '040000' for some reason
-            mode = '40000'
+            # TODO: octal format
+            #          0   4   0   0   0   0
+            mode = 0b000_100_000_000_000_000
+            # mode = '40000'
 
-        entries[name] = f'{mode} {name}'.encode() + b'\0' + bytes.fromhex(digest)
+        entries[name] = f'{mode:o} {name}'.encode() + b'\0' + bytes.fromhex(digest)
 
     content: bytes
     result = [value for key, value in sorted(entries.items())]
