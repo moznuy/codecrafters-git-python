@@ -26,13 +26,13 @@ def cat_file():
 
     header: bytes
     content: bytes
-    header, content = raw_content.split(b'\0', maxsplit=1)
+    header, content = raw_content.split(b"\0", maxsplit=1)
 
     file_type: str
     size_raw: str
     file_type, size_raw = header.decode().split(maxsplit=1)
     size = int(size_raw)
-    assert file_type == 'blob'
+    assert file_type == "blob"
     assert size == len(content)
 
     # Raw bytes output:
@@ -51,14 +51,14 @@ def hash_object(filename: str = None) -> str:
 
     size = len(content)
     header = f"blob {size}".encode()
-    raw_content = header + b'\0' + content
+    raw_content = header + b"\0" + content
     digest = hashlib.sha1(raw_content).hexdigest()
     compressed = zlib.compress(raw_content)
 
     folder, file = digest[:2], digest[2:]
 
     os.makedirs(f".git/objects/{folder}", exist_ok=True)
-    with open(f".git/objects/{folder}/{file}", 'wb') as f:
+    with open(f".git/objects/{folder}/{file}", "wb") as f:
         f.write(compressed)
     return digest
 
@@ -76,13 +76,13 @@ def ls_tree():
 
     header: bytes
     content: bytes
-    header, content = raw_content.split(b'\0', maxsplit=1)
+    header, content = raw_content.split(b"\0", maxsplit=1)
 
     file_type: str
     size_raw: str
     file_type, size_raw = header.decode().split(maxsplit=1)
     size = int(size_raw)
-    assert file_type == 'tree'
+    assert file_type == "tree"
     assert size == len(content)
 
     while True:
@@ -91,7 +91,7 @@ def ls_tree():
         file_header: bytes
         rest: bytes
         file_sha: bytes
-        file_header, rest = content.split(b'\0', maxsplit=1)
+        file_header, rest = content.split(b"\0", maxsplit=1)
         file_sha, content = rest[:20], rest[20:]
         mode, filename = file_header.decode().split()
         hex_digest = file_sha.hex()
@@ -102,7 +102,7 @@ def ls_tree():
 def write_tree(path: str) -> str:
     entries: dict[str, bytes] = {}
     for entry in os.scandir(path):
-        if entry.name == '.git':
+        if entry.name == ".git":
             continue
 
         # digest: str = ''
@@ -124,16 +124,16 @@ def write_tree(path: str) -> str:
             mode = 0b000_100_000_000_000_000
             # mode = '40000'
 
-        entries[name] = f'{mode:o} {name}'.encode() + b'\0' + bytes.fromhex(digest)
+        entries[name] = f"{mode:o} {name}".encode() + b"\0" + bytes.fromhex(digest)
 
     content: bytes
     result = [value for key, value in sorted(entries.items())]
-    content = b''.join(result)
+    content = b"".join(result)
 
     # Same code
     size = len(content)
     header = f"tree {size}".encode()
-    raw_content = header + b'\0' + content
+    raw_content = header + b"\0" + content
 
     digest = hashlib.sha1(raw_content).hexdigest()
     compressed = zlib.compress(raw_content)
@@ -141,7 +141,7 @@ def write_tree(path: str) -> str:
     folder, file = digest[:2], digest[2:]
 
     os.makedirs(f".git/objects/{folder}", exist_ok=True)
-    with open(f".git/objects/{folder}/{file}", 'wb') as f:
+    with open(f".git/objects/{folder}/{file}", "wb") as f:
         f.write(compressed)
     return digest
 
@@ -152,18 +152,18 @@ def commit_tree():
     parent = sys.argv[4]
     m = sys.argv[5]
     message = sys.argv[6]
-    assert p == '-p'
-    assert m == '-m'
+    assert p == "-p"
+    assert m == "-m"
     author = "Serhii Charykov <laammaar@gmail.com>"
     timestamp = datetime.datetime.now(tz=datetime.UTC).timestamp()
     # TODO: get proper offset
-    tz_offset = '+0000'
+    tz_offset = "+0000"
 
-    content: bytes = b''
-    content += f'tree {tree}\n'.encode()
-    content += f'parent {parent}\n'.encode()
-    content += f'author {author} {timestamp} {tz_offset}\n'.encode()
-    content += f'committer {author} {timestamp} {tz_offset}\n'.encode()
+    content: bytes = b""
+    content += f"tree {tree}\n".encode()
+    content += f"parent {parent}\n".encode()
+    content += f"author {author} {timestamp} {tz_offset}\n".encode()
+    content += f"committer {author} {timestamp} {tz_offset}\n".encode()
     content += f"\n".encode()
     content += message.encode()
     content += f"\n".encode()
@@ -171,7 +171,7 @@ def commit_tree():
     # Same code
     size = len(content)
     header = f"commit {size}".encode()
-    raw_content = header + b'\0' + content
+    raw_content = header + b"\0" + content
 
     digest = hashlib.sha1(raw_content).hexdigest()
     compressed = zlib.compress(raw_content)
@@ -179,10 +179,18 @@ def commit_tree():
     folder, file = digest[:2], digest[2:]
 
     os.makedirs(f".git/objects/{folder}", exist_ok=True)
-    with open(f".git/objects/{folder}/{file}", 'wb') as f:
+    with open(f".git/objects/{folder}/{file}", "wb") as f:
         f.write(compressed)
 
     return digest
+
+
+def clone():
+    url = sys.argv[2]
+    folder = sys.argv[3]
+    print(url)
+    print(folder)
+
 
 def main():
     command = sys.argv[1]
@@ -195,9 +203,11 @@ def main():
     elif command == "ls-tree":
         ls_tree()
     elif command == "write-tree":
-        print(write_tree('.'))
+        print(write_tree("."))
     elif command == "commit-tree":
         print(commit_tree())
+    elif command == "clone":
+        clone()
     else:
         raise RuntimeError(f"Unknown command #{command}")
 
