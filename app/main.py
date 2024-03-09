@@ -12,7 +12,7 @@ from typing import Iterator
 from typing import Union
 
 
-def init(create_ref = True):
+def init(create_ref=True):
     os.mkdir(".git")
     os.mkdir(".git/objects")
     os.mkdir(".git/refs")
@@ -123,7 +123,6 @@ def _ls_tree(content: bytes) -> list[GitFile]:
     return res
 
 
-
 def write_tree(path: str) -> str:
     entries: dict[str, bytes] = {}
     for entry in os.scandir(path):
@@ -215,7 +214,7 @@ def parse_lines(data: bytes) -> Iterator[bytes]:
         if not data:
             break
 
-        if data.startswith(b'PACK'):
+        if data.startswith(b"PACK"):
             yield data
             # TODO: what if something after data
             break
@@ -225,7 +224,7 @@ def parse_lines(data: bytes) -> Iterator[bytes]:
         length = int.from_bytes(bytes.fromhex(length_raw.decode()))
 
         if length == 0:
-            yield b''
+            yield b""
             continue
 
         length -= 4
@@ -236,16 +235,16 @@ def parse_lines(data: bytes) -> Iterator[bytes]:
 
 
 def read_length(data: bytes) -> tuple[int, int, bytes]:
-    length_raw = ''
+    length_raw = ""
     data_type: int = 0
     while True:
         byte, data = data[0], data[1:]
 
         if not data_type:
             data_type = (byte & 0b0111_0000) >> 4
-            length_raw = format(byte & 0b0000_1111, '04b')
+            length_raw = format(byte & 0b0000_1111, "04b")
         else:
-            tmp = format(byte & 0b0111_1111, '07b')
+            tmp = format(byte & 0b0111_1111, "07b")
             length_raw = tmp + length_raw
 
         if not byte & 0b1000_0000:
@@ -255,11 +254,11 @@ def read_length(data: bytes) -> tuple[int, int, bytes]:
 
 
 def read_size(data: bytes) -> tuple[int, bytes]:
-    length_raw = ''
+    length_raw = ""
     while True:
         byte, data = data[0], data[1:]
 
-        tmp = format(byte & 0b0111_1111, '07b')
+        tmp = format(byte & 0b0111_1111, "07b")
         length_raw = tmp + length_raw
 
         if not byte & 0b1000_0000:
@@ -269,10 +268,10 @@ def read_size(data: bytes) -> tuple[int, bytes]:
 
 
 TYPES = {
-    1: 'commit',
-    2: 'tree',
-    3: 'blob',
-    4: 'tag',
+    1: "commit",
+    2: "tree",
+    3: "blob",
+    4: "tag",
     6: "ofs_delta",
     7: "ref_delta",
 }
@@ -302,7 +301,7 @@ class GitObject:
         head, tail = os.path.split(path)
         if head:
             os.makedirs(head, exist_ok=True)
-        with open(path, 'wb') as f:
+        with open(path, "wb") as f:
             f.write(self.body)
         os.chmod(path, mode)
 
@@ -383,7 +382,7 @@ def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
             assert size > 0
             i += 1
             assert i + size <= len(data)  # TODO: <= or <
-            new_data = data[i:i + size]
+            new_data = data[i : i + size]
             i += size
             instructions.append(InstructionInsert(data=new_data))
 
@@ -394,12 +393,17 @@ def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
     # Sanity check
     assert i == len(data)
 
-    return GitRefDelta(ref_to=ref_to, base_size=base_size, finish_size=finish_size, instructions=instructions)
+    return GitRefDelta(
+        ref_to=ref_to,
+        base_size=base_size,
+        finish_size=finish_size,
+        instructions=instructions,
+    )
 
 
 def parse_data(data: bytes):
     signature, data = data[:4], data[4:]
-    assert signature == b'PACK'
+    assert signature == b"PACK"
 
     version_raw, data = data[:4], data[4:]
     version = int.from_bytes(version_raw)
@@ -420,13 +424,13 @@ def parse_data(data: bytes):
         assert data_type != 6  # Happens only if you ask server
 
         # not delta
-        ref_to = ''
+        ref_to = ""
         if data_type > 5:
             ref_to_raw, data = data[:20], data[20:]
             ref_to = ref_to_raw.hex()
 
         dec = zlib.decompressobj()
-        decompressed = b''
+        decompressed = b""
         while True:
             decompressed += dec.decompress(data)
             if dec.eof:
@@ -449,14 +453,21 @@ def parse_data(data: bytes):
             raise RuntimeError("Can't resolve smth")
 
         resolve = deltas[i]
-        deltas = deltas[0:i] + deltas[i+1:]
+        deltas = deltas[0:i] + deltas[i + 1 :]
 
         base = o_store[delta.ref_to]
-        body = b''
+        body = b""
         for instruction in resolve.instructions:
             if isinstance(instruction, InstructionCopy):
-                assert 0 <= instruction.offset < instruction.offset + instruction.size <= len(base.body)
-                body += base.body[instruction.offset:instruction.offset + instruction.size]
+                assert (
+                    0
+                    <= instruction.offset
+                    < instruction.offset + instruction.size
+                    <= len(base.body)
+                )
+                body += base.body[
+                    instruction.offset : instruction.offset + instruction.size
+                ]
                 continue
             if isinstance(instruction, InstructionInsert):
                 body += instruction.data
@@ -471,18 +482,18 @@ def parse_data(data: bytes):
     return o_store
 
 
-
 def prepare_line(s: str) -> bytes:
     if not s:
-        return b'0000'
-    s += '\n'
+        return b"0000"
+    s += "\n"
     raw = s.encode()
     length = len(raw) + 4
     raw_length = length.to_bytes(2).hex().encode()
     return raw_length + raw
 
 
-DEBUG = os.environ.get('DEBUG') == '1'
+DEBUG = os.environ.get("DEBUG") == "1"
+
 
 def clone():
     url = sys.argv[2]
@@ -498,80 +509,80 @@ def clone():
 
 
 def _clone(url: str):
-    refs_url = f'{url}/info/refs?service=git-upload-pack'
+    refs_url = f"{url}/info/refs?service=git-upload-pack"
     if DEBUG:
-        with open('../tmp', 'rb') as f:
+        with open("../tmp", "rb") as f:
             data = f.read()
     else:
         with urllib.request.urlopen(refs_url) as f:
             data = f.read()
 
     refs: dict[str, str] = {}
-    capabilities = b''
+    capabilities = b""
     for line in parse_lines(data):
         if not line:
             continue
-        if line.startswith(b'#'):
+        if line.startswith(b"#"):
             continue
         ref: bytes
         digest: bytes
         rest: bytes
-        digest, rest = line.split(b' ', maxsplit=1)
+        digest, rest = line.split(b" ", maxsplit=1)
         if not capabilities:
-            ref, capabilities = rest.split(b'\0')
+            ref, capabilities = rest.split(b"\0")
             # print(capabilities)
         else:
             ref = rest
         refs[ref.decode()] = digest.decode()
 
-    head_ref = refs['HEAD']
+    head_ref = refs["HEAD"]
     # print(refs)
     caps = capabilities.split()
     for cap in caps:
-        if cap.startswith(b'symref=HEAD:'):
-            head = cap.replace(b'symref=HEAD:', b'').decode()
+        if cap.startswith(b"symref=HEAD:"):
+            head = cap.replace(b"symref=HEAD:", b"").decode()
             with open(".git/HEAD", "w") as f:
                 f.write(f"ref: {head}\n")
             break
     else:
         raise RuntimeError("HEAD is unknown")
 
-    os.makedirs('.git/refs/heads/', exist_ok=True)
+    os.makedirs(".git/refs/heads/", exist_ok=True)
     for reff, value in refs.items():
-        if not reff.startswith('refs/heads/'):
+        if not reff.startswith("refs/heads/"):
             continue
 
-        with open(f'.git/{reff}', 'w') as f:
+        with open(f".git/{reff}", "w") as f:
             f.write(value)
-            f.write('\n')
+            f.write("\n")
         # print(reff, value)
 
     # print(f"Downloading {head_ref=}")
-    data = b''
-    data += prepare_line(f'want {head_ref}')
-    data += prepare_line('')
-    data += prepare_line('done')
+    data = b""
+    data += prepare_line(f"want {head_ref}")
+    data += prepare_line("")
+    data += prepare_line("done")
 
-    data_url = f'{url}/git-upload-pack'
+    data_url = f"{url}/git-upload-pack"
 
     if DEBUG:
-        with open('../tmp2', 'rb') as f:
+        with open("../tmp2", "rb") as f:
             data = f.read()
     else:
         with urllib.request.urlopen(data_url, data) as f:
             data = f.read()
 
     lines = list(parse_lines(data))
-    assert lines[0] == b'NAK'
-    assert lines[1].startswith(b'PACK')
+    assert lines[0] == b"NAK"
+    assert lines[1].startswith(b"PACK")
     assert len(lines) == 2
 
     packed_data = lines[1]
     o_store = parse_data(packed_data)
     commit = o_store[head_ref]
-    for line in commit.body.split(b'\n'):
-        if line.startswith(b'tree '):
-            tree_ref = line[len('tree '):].decode()
+    for line in commit.body.split(b"\n"):
+        if line.startswith(b"tree "):
+            tree_ref = line[len("tree ") :].decode()
             break
     else:
         raise RuntimeError("No tree found")
@@ -579,14 +590,18 @@ def _clone(url: str):
     restore_working_dir(tree_ref, o_store)
 
 
-def restore_working_dir(tree_ref: str, o_store: dict[str, GitObject], path: str='', mode: int=0):
+def restore_working_dir(
+    tree_ref: str, o_store: dict[str, GitObject], path: str = "", mode: int = 0
+):
     o = o_store[tree_ref]
-    if o.type == 'tree':
+    if o.type == "tree":
         files = _ls_tree(o.body)
         for file in files:
-            restore_working_dir(file.digest, o_store,os.path.join(path, file.name),  file.mode)
+            restore_working_dir(
+                file.digest, o_store, os.path.join(path, file.name), file.mode
+            )
         return
-    if o.type == 'blob':
+    if o.type == "blob":
         o.restore(path, mode)
         return
     raise RuntimeError("Unknown object type")
