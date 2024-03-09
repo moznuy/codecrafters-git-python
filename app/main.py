@@ -72,11 +72,11 @@ def hash_object(filename: str = None) -> str:
 
 
 def ls_tree():
-    # TODO: same code
     no = sys.argv[2]
     revision = sys.argv[3]
     assert no == "--name-only"
 
+    # TODO: same code
     folder, file = revision[:2], revision[2:]
     with open(f".git/objects/{folder}/{file}", "rb") as f:
         compressed = f.read()
@@ -85,7 +85,6 @@ def ls_tree():
     header: bytes
     content: bytes
     header, content = raw_content.split(b"\0", maxsplit=1)
-
     file_type: str
     size_raw: str
     file_type, size_raw = header.decode().split(maxsplit=1)
@@ -93,6 +92,21 @@ def ls_tree():
     assert file_type == "tree"
     assert size == len(content)
 
+    res = _ls_tree(content)
+
+    for r in res:
+        print(r.name)
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GitFile:
+    name: str
+    mode: int
+    digest: str
+
+
+def _ls_tree(content: bytes) -> list[GitFile]:
+    res = []
     while True:
         if not content:
             break
@@ -101,10 +115,13 @@ def ls_tree():
         file_sha: bytes
         file_header, rest = content.split(b"\0", maxsplit=1)
         file_sha, content = rest[:20], rest[20:]
-        mode, filename = file_header.decode().split()
+        mode_raw, filename = file_header.decode().split()
+        mode = int(mode_raw, 8)
         hex_digest = file_sha.hex()
+        res.append(GitFile(name=filename, mode=mode, digest=hex_digest))
         # print(mode, filename, hex_digest)
-        print(filename)
+    return res
+
 
 
 def write_tree(path: str) -> str:
@@ -281,6 +298,14 @@ class GitObject:
         with open(f".git/objects/{folder}/{file}", "wb") as f:
             f.write(compressed)
 
+    def restore(self, path: str, mode: int):
+        head, tail = os.path.split(path)
+        if head:
+            os.makedirs(head, exist_ok=True)
+        with open(path, 'wb') as f:
+            f.write(self.body)
+        os.chmod(path, mode)
+
     @functools.cached_property
     def digest(self):
         size = len(self.body)
@@ -382,7 +407,7 @@ def parse_data(data: bytes):
 
     object_count_raw, data = data[:4], data[4:]
     object_count = int.from_bytes(object_count_raw)
-    print(f"{object_count=}")
+    # print(f"{object_count=}")
     o_store: dict[str, GitObject] = {}
 
     deltas: list[GitRefDelta] = []
@@ -441,6 +466,9 @@ def parse_data(data: bytes):
         o = GitObject(type=base.type, body=body)
         o_store[o.digest] = o
         o.save()
+    # TODO: figure out why data is not empty
+    # print(data)
+    return o_store
 
 
 
@@ -454,12 +482,16 @@ def prepare_line(s: str) -> bytes:
     return raw_length + raw
 
 
+DEBUG = os.environ.get('DEBUG') == '1'
+
 def clone():
     url = sys.argv[2]
     folder = sys.argv[3]
 
-    shutil.rmtree(f"{folder}/.git", ignore_errors=True)
-    os.makedirs(folder, exist_ok=True)  # Todo: false
+    if DEBUG:
+        shutil.rmtree(folder, ignore_errors=True)
+
+    os.makedirs(folder, exist_ok=False)
     with contextlib.chdir(folder):
         init(create_ref=False)
         _clone(url)
@@ -467,15 +499,15 @@ def clone():
 
 def _clone(url: str):
     refs_url = f'{url}/info/refs?service=git-upload-pack'
-    # with urllib.request.urlopen(refs_url) as f:
-    #     data = f.read()
-
-    capabilities = b''
-
-    with open('tmp', 'rb') as f:
-        data = f.read()
+    if DEBUG:
+        with open('../tmp', 'rb') as f:
+            data = f.read()
+    else:
+        with urllib.request.urlopen(refs_url) as f:
+            data = f.read()
 
     refs: dict[str, str] = {}
+    capabilities = b''
     for line in parse_lines(data):
         if not line:
             continue
@@ -522,11 +554,12 @@ def _clone(url: str):
 
     data_url = f'{url}/git-upload-pack'
 
-    # with urllib.request.urlopen(data_url, data) as f:
-    #     data = f.read()
-
-    with open('tmp2', 'rb') as f:
-        data = f.read()
+    if DEBUG:
+        with open('../tmp2', 'rb') as f:
+            data = f.read()
+    else:
+        with urllib.request.urlopen(data_url, data) as f:
+            data = f.read()
 
     lines = list(parse_lines(data))
     assert lines[0] == b'NAK'
@@ -534,7 +567,29 @@ def _clone(url: str):
     assert len(lines) == 2
 
     packed_data = lines[1]
-    parse_data(packed_data)
+    o_store = parse_data(packed_data)
+    commit = o_store[head_ref]
+    for line in commit.body.split(b'\n'):
+        if line.startswith(b'tree '):
+            tree_ref = line[len('tree '):].decode()
+            break
+    else:
+        raise RuntimeError("No tree found")
+
+    restore_working_dir(tree_ref, o_store)
+
+
+def restore_working_dir(tree_ref: str, o_store: dict[str, GitObject], path: str='', mode: int=0):
+    o = o_store[tree_ref]
+    if o.type == 'tree':
+        files = _ls_tree(o.body)
+        for file in files:
+            restore_working_dir(file.digest, o_store,os.path.join(path, file.name),  file.mode)
+        return
+    if o.type == 'blob':
+        o.restore(path, mode)
+        return
+    raise RuntimeError("Unknown object type")
 
 
 def main():
