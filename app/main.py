@@ -2,7 +2,9 @@ import datetime
 import hashlib
 import sys
 import os
+import urllib.request
 import zlib
+from typing import Iterator
 
 
 def init():
@@ -185,11 +187,186 @@ def commit_tree():
     return digest
 
 
+def parse_lines(data: bytes) -> Iterator[bytes]:
+    while True:
+        if not data:
+            break
+
+        if data.startswith(b'PACK'):
+            yield data
+            # TODO: what if something after data
+            break
+
+        length_raw: bytes
+        length_raw, data = data[:4], data[4:]
+        length = int.from_bytes(bytes.fromhex(length_raw.decode()))
+
+        if length == 0:
+            yield b''
+            continue
+
+        length -= 4
+        assert length > 0
+        assert length <= 2**32
+        line, data = data[:length], data[length:]
+        yield line.rstrip()
+
+
+def read_length(data: bytes) -> tuple[int, int, bytes]:
+    length_raw = ''
+    data_type: int = 0
+    while True:
+        byte, data = data[0], data[1:]
+
+        if not data_type:
+            data_type = (byte & 0b0111_0000) >> 4
+            length_raw = format(byte & 0b0000_1111, '04b')
+        else:
+            tmp = format(byte & 0b0111_1111, '07b')
+            length_raw = tmp + length_raw
+
+        if not byte & 0b1000_0000:
+            break
+    result = int(length_raw, 2)
+    return result, data_type, data
+
+
+def read_size(data: bytes) -> tuple[int, bytes]:
+    length_raw = ''
+    while True:
+        byte, data = data[0], data[1:]
+
+        tmp = format(byte & 0b0111_1111, '07b')
+        length_raw = tmp + length_raw
+
+        if not byte & 0b1000_0000:
+            break
+    result = int(length_raw, 2)
+    return result, data
+
+
+types = {
+    1: 'commit',
+    2: 'tree',
+    3: 'blob',
+    4: 'tag',
+    6: "ofs_delta",
+    7: "ref_delta",
+}
+
+def parse_data(data: bytes):
+    signature, data = data[:4], data[4:]
+    assert signature == b'PACK'
+
+    version_raw, data = data[:4], data[4:]
+    version = int.from_bytes(version_raw)
+    assert version == 2
+
+    object_count_raw, data = data[:4], data[4:]
+    object_count = int.from_bytes(object_count_raw)
+    print(f"{object_count=}")
+
+    for object_index in range(object_count):
+        # print(f"{object_index} {len(data)=}")
+        length, data_type, data = read_length(data)
+        assert data_type in types, f"Unexpected type {data_type}"
+
+        print(types[data_type], end=' ')
+
+        # not delta
+        ref_to = ''
+        if data_type > 5:
+            ref_to_raw, data = data[:20], data[20:]
+            ref_to = ref_to_raw.hex()
+
+        dec = zlib.decompressobj()
+        decompressed = b''
+        while True:
+            decompressed += dec.decompress(data)
+            if dec.eof:
+                data = dec.unused_data
+                break
+        assert len(decompressed) == length
+        print(ref_to, length, decompressed)
+
+        # original_data = data
+        #
+        # dec = zlib.decompressobj()
+        # dec.decompress(data)
+        #
+        # length1, data = read_size(data)
+        # length2, data = read_size(data)
+        # print(length1, length2)
+        # data = original_data[lengt0:]
+        # # delta format
+        # name, data = data[:20], data[20:]
+        # delta_raw, data = data[:length-20], data[length-20:]
+
+
+
+
+
+def prepare_line(s: str) -> bytes:
+    if not s:
+        return b'0000'
+    s += '\n'
+    raw = s.encode()
+    length = len(raw) + 4
+    raw_length = length.to_bytes(2).hex().encode()
+    return raw_length + raw
+
+
 def clone():
     url = sys.argv[2]
     folder = sys.argv[3]
-    print(url)
-    print(folder)
+
+    refs_url = f'{url}/info/refs?service=git-upload-pack'
+    # with urllib.request.urlopen(refs_url) as f:
+    #     data = f.read()
+
+    capabilities = b''
+
+    with open('tmp', 'rb') as f:
+        data = f.read()
+
+    refs: dict[str, str] = {}
+    for line in parse_lines(data):
+        if not line:
+            continue
+        if line.startswith(b'#'):
+            continue
+        ref: bytes
+        digest: bytes
+        rest: bytes
+        digest, rest = line.split(b' ', maxsplit=1)
+        if not capabilities:
+            ref, capabilities = rest.split(b'\0')
+            # print(capabilities)
+        else:
+            ref = rest
+        refs[ref.decode()] = digest.decode()
+
+    head_ref = refs['HEAD']
+    data = b''
+    data += prepare_line(f'want {head_ref}')
+    data += prepare_line('')
+    data += prepare_line('done')
+
+    data_url = f'{url}/git-upload-pack'
+
+    # with urllib.request.urlopen(data_url, data) as f:
+    #     data = f.read()
+
+    with open('tmp2', 'rb') as f:
+        data = f.read()
+
+    lines = list(parse_lines(data))
+    assert lines[0] == b'NAK'
+    assert lines[1].startswith(b'PACK')
+    assert len(lines) == 2
+
+    packed_data = lines[1]
+    parse_data(packed_data)
 
 
 def main():
