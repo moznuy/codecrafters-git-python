@@ -39,10 +39,11 @@ def cat_file():
     sys.stdout.flush()
 
 
-def hash_object():
-    w = sys.argv[2]
-    filename = sys.argv[3]
-    assert w == "-w"
+def hash_object(filename: str = None) -> str:
+    if filename is None:
+        w = sys.argv[2]
+        filename = sys.argv[3]
+        assert w == "-w"
 
     with open(filename, "rb") as f:
         content = f.read()
@@ -58,7 +59,7 @@ def hash_object():
     os.makedirs(f".git/objects/{folder}", exist_ok=True)
     with open(f".git/objects/{folder}/{file}", 'wb') as f:
         f.write(compressed)
-    print(digest)
+    return digest
 
 
 def ls_tree():
@@ -97,6 +98,47 @@ def ls_tree():
         print(filename)
 
 
+def write_tree(path: str) -> str:
+    entries: dict[str, bytes] = {}
+    for entry in os.scandir(path):
+        if entry.name == '.git':
+            continue
+
+        # digest: str = ''
+        # name: str = ''
+        # mode: str = ''
+
+        if entry.is_file():
+            digest = hash_object(os.path.join(path, entry.name))
+            name = entry.name
+            mode = '100644'
+        else:
+            digest = write_tree(os.path.join(path, entry.name))
+            name = entry.name
+            # TODO: not '040000' for some reason
+            mode = '40000'
+
+        entries[name] = f'{mode} {name}'.encode() + b'\0' + bytes.fromhex(digest)
+
+    content: bytes
+    result = [value for key, value in sorted(entries.items())]
+    content = b''.join(result)
+
+    # Same code
+    size = len(content)
+    header = f"tree {size}".encode()
+    raw_content = header + b'\0' + content
+
+    digest = hashlib.sha1(raw_content).hexdigest()
+    compressed = zlib.compress(raw_content)
+
+    folder, file = digest[:2], digest[2:]
+
+    os.makedirs(f".git/objects/{folder}", exist_ok=True)
+    with open(f".git/objects/{folder}/{file}", 'wb') as f:
+        f.write(compressed)
+    return digest
+
 
 def main():
     command = sys.argv[1]
@@ -105,9 +147,11 @@ def main():
     elif command == "cat-file":
         cat_file()
     elif command == "hash-object":
-        hash_object()
+        print(hash_object())
     elif command == "ls-tree":
         ls_tree()
+    elif command == "write-tree":
+        print(write_tree('.'))
     else:
         raise RuntimeError(f"Unknown command #{command}")
 

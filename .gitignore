@@ -1,5 +1,5 @@
 .idea
-test_dir
+test_dir*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
