@@ -166,6 +166,7 @@ def commit_tree():
     content += f'committer {author} {timestamp} {tz_offset}\n'.encode()
     content += f"\n".encode()
     content += message.encode()
+    content += f"\n".encode()
 
     # Same code
     size = len(content)
