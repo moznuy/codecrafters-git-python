@@ -1,19 +1,25 @@
+import contextlib
+import dataclasses
 import datetime
+import functools
 import hashlib
+import shutil
 import sys
 import os
 import urllib.request
 import zlib
 from typing import Iterator
+from typing import Union
 
 
-def init():
+def init(create_ref = True):
     os.mkdir(".git")
     os.mkdir(".git/objects")
     os.mkdir(".git/refs")
-    with open(".git/HEAD", "w") as f:
-        f.write("ref: refs/heads/main\n")
-    print("Initialized git directory")
+    if create_ref:
+        with open(".git/HEAD", "w") as f:
+            f.write("ref: refs/heads/main\n")
+        print("Initialized git directory")
 
 
 def cat_file():
@@ -245,7 +251,7 @@ def read_size(data: bytes) -> tuple[int, bytes]:
     return result, data
 
 
-types = {
+TYPES = {
     1: 'commit',
     2: 'tree',
     3: 'blob',
@@ -253,6 +259,118 @@ types = {
     6: "ofs_delta",
     7: "ref_delta",
 }
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GitObject:
+    type: str
+    body: bytes
+
+    def save(self):
+        # Same code
+        size = len(self.body)
+        header = f"{self.type} {size}".encode()
+        raw_content = header + b"\0" + self.body
+
+        digest = hashlib.sha1(raw_content).hexdigest()
+        compressed = zlib.compress(raw_content)
+
+        folder, file = digest[:2], digest[2:]
+
+        os.makedirs(f".git/objects/{folder}", exist_ok=True)
+        with open(f".git/objects/{folder}/{file}", "wb") as f:
+            f.write(compressed)
+
+    @functools.cached_property
+    def digest(self):
+        size = len(self.body)
+        header = f"{self.type} {size}".encode()
+        raw_content = header + b"\0" + self.body
+
+        digest = hashlib.sha1(raw_content).hexdigest()
+        return digest
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class InstructionCopy:
+    offset: int
+    size: int
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class InstructionInsert:
+    data: bytes
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class GitRefDelta:
+    ref_to: str
+    base_size: int
+    finish_size: int
+    instructions: list[Union[InstructionCopy, InstructionInsert]]  # TOdo: use enums
+
+
+def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
+    i = 0
+
+    base_size, data = read_size(data)
+    finish_size, data = read_size(data)
+    instructions: list[Union[InstructionCopy, InstructionInsert]] = []
+    while i < len(data):
+        cur = data[i]
+
+        # Copy
+        if cur & 0x80:
+            offset = 0
+            size = 0
+
+            if cur & 0b0000_0001:
+                i += 1
+                offset |= data[i]
+            if cur & 0b0000_0010:
+                i += 1
+                offset |= data[i] << 8
+            if cur & 0b0000_0100:
+                i += 1
+                offset |= data[i] << 16
+            if cur & 0b0000_1000:
+                i += 1
+                offset |= data[i] << 24
+            if cur & 0b0001_0000:
+                i += 1
+                size |= data[i]
+            if cur & 0b0010_0000:
+                i += 1
+                size |= data[i] << 8
+            if cur & 0b0100_0000:
+                i += 1
+                size |= data[i] << 16
+
+            # Special case for 0 size
+            if not size:
+                size = 0x10000
+
+            i += 1
+            instructions.append(InstructionCopy(offset=offset, size=size))
+        # Insert
+        elif cur & 0x7F:
+            size = cur & 0x7F
+            assert size > 0
+            i += 1
+            assert i + size <= len(data)  # TODO: <= or <
+            new_data = data[i:i + size]
+            i += size
+            instructions.append(InstructionInsert(data=new_data))
+
+        # Zero
+        else:
+            raise RuntimeError("Rseserved value")
+
+    # Sanity check
+    assert i == len(data)
+
+    return GitRefDelta(ref_to=ref_to, base_size=base_size, finish_size=finish_size, instructions=instructions)
+
 
 def parse_data(data: bytes):
     signature, data = data[:4], data[4:]
@@ -265,13 +383,16 @@ def parse_data(data: bytes):
     object_count_raw, data = data[:4], data[4:]
     object_count = int.from_bytes(object_count_raw)
     print(f"{object_count=}")
+    o_store: dict[str, GitObject] = {}
+
+    deltas: list[GitRefDelta] = []
 
     for object_index in range(object_count):
         # print(f"{object_index} {len(data)=}")
         length, data_type, data = read_length(data)
-        assert data_type in types, f"Unexpected type {data_type}"
-
-        print(types[data_type], end=' ')
+        assert data_type in TYPES, f"Unexpected type {data_type}"
+        data_type_str = TYPES[data_type]
+        assert data_type != 6  # Happens only if you ask server
 
         # not delta
         ref_to = ''
@@ -287,22 +408,39 @@ def parse_data(data: bytes):
                 data = dec.unused_data
                 break
         assert len(decompressed) == length
-        print(ref_to, length, decompressed)
+        # print(data_type_str, ref_to, length, decompressed)
+        if data_type < 5:
+            o = GitObject(type=data_type_str, body=decompressed)
+            o_store[o.digest] = o
+            o.save()
+        else:
+            deltas.append(parse_delta(ref_to, decompressed))
 
-        # original_data = data
-        #
-        # dec = zlib.decompressobj()
-        # dec.decompress(data)
-        #
-        # length1, data = read_size(data)
-        # length2, data = read_size(data)
-        # print(length1, length2)
-        # data = original_data[lengt0:]
-        # # delta format
-        # name, data = data[:20], data[20:]
-        # delta_raw, data = data[:length-20], data[length-20:]
+    while deltas:
+        for i, delta in enumerate(deltas):
+            if delta.ref_to in o_store:
+                break
+        else:
+            raise RuntimeError("Can't resolve smth")
 
+        resolve = deltas[i]
+        deltas = deltas[0:i] + deltas[i+1:]
 
+        base = o_store[delta.ref_to]
+        body = b''
+        for instruction in resolve.instructions:
+            if isinstance(instruction, InstructionCopy):
+                assert 0 <= instruction.offset < instruction.offset + instruction.size <= len(base.body)
+                body += base.body[instruction.offset:instruction.offset + instruction.size]
+                continue
+            if isinstance(instruction, InstructionInsert):
+                body += instruction.data
+                continue
+            raise RuntimeError("Invalid Instruction")
+
+        o = GitObject(type=base.type, body=body)
+        o_store[o.digest] = o
+        o.save()
 
 
 
@@ -320,6 +458,14 @@ def clone():
     url = sys.argv[2]
     folder = sys.argv[3]
 
+    shutil.rmtree(f"{folder}/.git", ignore_errors=True)
+    os.makedirs(folder, exist_ok=True)  # Todo: false
+    with contextlib.chdir(folder):
+        init(create_ref=False)
+        _clone(url)
+
+
+def _clone(url: str):
     refs_url = f'{url}/info/refs?service=git-upload-pack'
     # with urllib.request.urlopen(refs_url) as f:
     #     data = f.read()
@@ -347,6 +493,28 @@ def clone():
         refs[ref.decode()] = digest.decode()
 
     head_ref = refs['HEAD']
+    # print(refs)
+    caps = capabilities.split()
+    for cap in caps:
+        if cap.startswith(b'symref=HEAD:'):
+            head = cap.replace(b'symref=HEAD:', b'').decode()
+            with open(".git/HEAD", "w") as f:
+                f.write(f"ref: {head}\n")
+            break
+    else:
+        raise RuntimeError("HEAD is unknown")
+
+    os.makedirs('.git/refs/heads/', exist_ok=True)
+    for reff, value in refs.items():
+        if not reff.startswith('refs/heads/'):
+            continue
+
+        with open(f'.git/{reff}', 'w') as f:
+            f.write(value)
+            f.write('\n')
+        # print(reff, value)
+
+    # print(f"Downloading {head_ref=}")
     data = b''
     data += prepare_line(f'want {head_ref}')
     data += prepare_line('')
