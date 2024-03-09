@@ -229,7 +229,7 @@ def parse_lines(data: bytes) -> Iterator[bytes]:
 
         length -= 4
         assert length > 0
-        assert length <= 2**32
+        assert length < len(data)
         line, data = data[:length], data[length:]
         yield line.rstrip()
 
@@ -393,7 +393,7 @@ def parse_delta(ref_to: str, data: bytes) -> GitRefDelta:
     )
 
 
-def parse_data(data: bytes):
+def parse_data(data: bytes, check_hash: str):
     signature, data = data[:4], data[4:]
     assert signature == b"PACK"
 
@@ -469,8 +469,9 @@ def parse_data(data: bytes):
         o = GitObject(type=base.type, body=body)
         o_store[o.digest] = o
         o.save()
-    # TODO: figure out why data is not empty
-    # print(data)
+
+    assert len(data) == 20
+    assert data.hex() == check_hash, "Hash check mismatch"
     return o_store
 
 
@@ -485,6 +486,7 @@ def prepare_line(s: str) -> bytes:
 
 
 DEBUG = os.environ.get("DEBUG") == "1"
+LOCAL = os.environ.get("LOCAL") == "1"
 
 
 def clone():
@@ -508,6 +510,9 @@ def _clone(url: str):
     else:
         with urllib.request.urlopen(refs_url) as f:
             data = f.read()
+        if LOCAL:
+            with open("../tmp", "wb") as f:
+                f.write(data)
 
     refs: dict[str, str] = {}
     capabilities = b""
@@ -563,6 +568,9 @@ def _clone(url: str):
     else:
         with urllib.request.urlopen(data_url, data) as f:
             data = f.read()
+        if LOCAL:
+            with open("../tmp2", "wb") as f:
+                f.write(data)
 
     lines = list(parse_lines(data))
     assert lines[0] == b"NAK"
@@ -570,7 +578,16 @@ def _clone(url: str):
     assert len(lines) == 2
 
     packed_data = lines[1]
-    o_store = parse_data(packed_data)
+    check_hash = hashlib.sha1(packed_data[:-20]).hexdigest()
+    o_store = parse_data(packed_data, check_hash)
+    os.makedirs('.git/objects/pack', exist_ok=True)
+    with open(f'.git/objects/pack/pack-{check_hash}.pack', 'wb') as f:
+        f.write(packed_data)
+
+    # 2013 behaviour
+    # content = '\n'.join(sorted(o_store)) + '\n'
+    # print(hashlib.sha1(content.encode()).hexdigest())
+
     commit = o_store[head_ref]
     for line in commit.body.split(b"\n"):
         if line.startswith(b"tree "):
