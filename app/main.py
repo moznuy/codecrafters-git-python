@@ -3,6 +3,7 @@ import dataclasses
 import datetime
 import functools
 import hashlib
+import operator
 import os
 import shutil
 import sys
@@ -48,7 +49,7 @@ def cat_file():
     sys.stdout.flush()
 
 
-def hash_object(filename: str = None) -> str:
+def hash_object(filename: str = None, save: bool = True) -> str:
     if filename is None:
         w = sys.argv[2]
         filename = sys.argv[3]
@@ -65,9 +66,10 @@ def hash_object(filename: str = None) -> str:
 
     folder, file = digest[:2], digest[2:]
 
-    os.makedirs(f".git/objects/{folder}", exist_ok=True)
-    with open(f".git/objects/{folder}/{file}", "wb") as f:
-        f.write(compressed)
+    if save:
+        os.makedirs(f".git/objects/{folder}", exist_ok=True)
+        with open(f".git/objects/{folder}/{file}", "wb") as f:
+            f.write(compressed)
     return digest
 
 
@@ -580,8 +582,8 @@ def _clone(url: str):
     packed_data = lines[1]
     check_hash = hashlib.sha1(packed_data[:-20]).hexdigest()
     o_store = parse_data(packed_data, check_hash)
-    os.makedirs('.git/objects/pack', exist_ok=True)
-    with open(f'.git/objects/pack/pack-{check_hash}.pack', 'wb') as f:
+    os.makedirs(".git/objects/pack", exist_ok=True)
+    with open(f".git/objects/pack/pack-{check_hash}.pack", "wb") as f:
         f.write(packed_data)
 
     # 2013 behaviour
@@ -597,6 +599,7 @@ def _clone(url: str):
         raise RuntimeError("No tree found")
 
     restore_working_dir(tree_ref, o_store)
+    restore_index()
 
 
 def restore_working_dir(
@@ -614,6 +617,99 @@ def restore_working_dir(
         o.restore(path, mode)
         return
     raise RuntimeError("Unknown object type")
+
+
+def collect_entries(path=".") -> list[os.DirEntry]:
+    files: list[os.DirEntry] = [entry for entry in os.scandir(path) if entry.is_file()]
+    dirs: list[os.DirEntry] = [
+        entry for entry in os.scandir(path) if entry.is_dir() and entry.name != ".git"
+    ]
+
+    entries = files + [
+        inner_entry
+        for entry in dirs
+        for inner_entry in collect_entries(os.path.join(path, entry.name))
+    ]
+    return entries
+
+
+@dataclasses.dataclass(kw_only=True, frozen=True, slots=True)
+class Entry:
+    name: bytes
+    digest: str
+    entry: os.DirEntry
+
+
+def restore_index():
+    entries = collect_entries()
+    sorted_entries = sorted(
+        [
+            Entry(
+                digest=hash_object(entry.path, save=False),
+                entry=entry,
+                name=entry.path.lstrip("./").rstrip("/").encode(),
+            )
+            for entry in entries
+        ],
+        key=operator.attrgetter("name"),
+    )
+    with open(".git/index", "wb") as f:
+        # with open("index", "wb") as f:
+
+        # Header 12 bytes
+        f.write(b"DIRC")  # sign
+        f.write(int(2).to_bytes(4))  # version 2
+        f.write(len(sorted_entries).to_bytes(4))  # number of entries
+
+        # Sorted Entries
+        for entry in sorted_entries:
+            stat = entry.entry.stat()
+
+            entry_len = 0
+            sec, nano = divmod(stat.st_ctime_ns, 10**9)
+            entry_len += f.write(sec.to_bytes(4))  # ctime metadata
+            entry_len += f.write(nano.to_bytes(4))  # ctime metadata fractions
+            sec, nano = divmod(stat.st_mtime_ns, 10**9)
+            entry_len += f.write(sec.to_bytes(4))  # mtime file data
+            entry_len += f.write(nano.to_bytes(4))  # mtime file data fractions
+            entry_len += f.write(stat.st_dev.to_bytes(4))  # stat dev
+            entry_len += f.write(stat.st_ino.to_bytes(4))  # ino dev
+
+            entry_len += f.write(b"\0\0")  # 16 bit zero
+            reg_file = 0b1000
+            value = reg_file << 3
+            zero = 0b000
+            value = (value | zero) << 9
+
+            # TODO: load permission from store
+            # stat.st_mode
+            permission = 0o100644 & 0b111_111_111  # only 9 bits
+            # permission =
+            value |= permission
+            entry_len += f.write(value.to_bytes(2))  # permissions
+            entry_len += f.write(stat.st_uid.to_bytes(4))  # uid
+            entry_len += f.write(stat.st_gid.to_bytes(4))  # gid
+            entry_len += f.write(
+                (stat.st_size & 0xFFFFFFFF).to_bytes(4)
+            )  # 32 bit truncated size
+            obj_name = bytes.fromhex(entry.digest)
+            assert len(obj_name) == 20
+            entry_len += f.write(obj_name)  # 20 bytes sha1
+
+            # assume bit, extended bit, 2 merge bits
+            flags = 0b0000 << 4
+            name = entry.name
+            assert b".git/" not in name
+            length = len(name)
+            if length > 0xFFF:  # Max 12 bits
+                length = 0xFFF
+            flags |= length
+            entry_len += f.write(flags.to_bytes(2))  # 16bit flags
+            entry_len += f.write(name)
+            entry_len += f.write(b"\0")  # str NUL terminator
+            if entry_len % 8:  # Keep entry 8 bytes aligned
+                pad = 8 - (entry_len % 8)
+                f.write(b"\0" * pad)
 
 
 def main():
